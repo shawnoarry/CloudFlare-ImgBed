@@ -239,23 +239,32 @@ export class HuggingFaceAPI {
      * 步骤4: 提交 LFS 文件引用
      */
     async commitLfsFile(filePath, oid, fileSize, commitMessage) {
+        return await this.commitOperations([{
+            key: 'lfsFile',
+            value: {
+                path: filePath,
+                algo: 'sha256',
+                size: fileSize,
+                oid
+            }
+        }], commitMessage);
+    }
+
+    /**
+     * Commit one or more prepared file operations in a single Hub commit.
+     */
+    async commitOperations(operations, commitMessage) {
+        if (!Array.isArray(operations) || operations.length === 0) {
+            throw new Error('At least one commit operation is required');
+        }
+
         const url = `${this.baseURL}/api/datasets/${this.repo}/commit/main`;
-        
-        // NDJSON 格式
         const body = [
             JSON.stringify({
                 key: 'header',
                 value: { summary: commitMessage }
             }),
-            JSON.stringify({
-                key: 'lfsFile',
-                value: {
-                    path: filePath,
-                    algo: 'sha256',
-                    size: fileSize,
-                    oid: oid
-                }
-            })
+            ...operations.map(operation => JSON.stringify(operation))
         ].join('\n');
 
         const response = await fetch(url, {
@@ -273,6 +282,90 @@ export class HuggingFaceAPI {
         }
 
         return await response.json();
+    }
+
+    async fileOperation(filePath, file) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const chunkSize = 4096;
+        const parts = [];
+        for (let index = 0; index < bytes.length; index += chunkSize) {
+            const chunk = bytes.subarray(index, Math.min(index + chunkSize, bytes.length));
+            let value = '';
+            for (let offset = 0; offset < chunk.length; offset += 1) {
+                value += String.fromCharCode(chunk[offset]);
+            }
+            parts.push(value);
+        }
+
+        return {
+            key: 'file',
+            value: {
+                path: filePath,
+                content: btoa(parts.join('')),
+                encoding: 'base64'
+            }
+        };
+    }
+
+    /**
+     * Upload multiple blobs and publish all references with one Hub commit.
+     * Every item must provide a stable path and a preverified SHA-256 digest.
+     */
+    async uploadFiles(files, commitMessage = 'Upload file batch') {
+        if (!Array.isArray(files) || files.length === 0) {
+            throw new Error('At least one file is required');
+        }
+        if (!await this.createRepoIfNotExists()) {
+            throw new Error('Failed to create or access repository');
+        }
+
+        const operations = [];
+        const uploadedFiles = [];
+
+        for (const entry of files) {
+            const { file, filePath, sha256 } = entry || {};
+            if (!(file instanceof Blob) || !filePath || !/^[a-f0-9]{64}$/.test(sha256 || '')) {
+                throw new Error('Each batch file requires a Blob, path, and SHA-256 digest');
+            }
+
+            const sampleBytes = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+            const sample = btoa(String.fromCharCode(...sampleBytes));
+            const preuploadResult = await this.preupload(filePath, file.size, sample);
+            const fileInfo = preuploadResult.files?.[0];
+            const needsLfs = fileInfo?.uploadMode === 'lfs';
+
+            if (needsLfs) {
+                const batchResult = await this.lfsBatch(sha256, file.size);
+                const object = batchResult.objects?.[0];
+                if (object?.error) {
+                    throw new Error(`LFS error: ${object.error.message}`);
+                }
+                if (object?.actions?.upload) {
+                    await this.uploadToLFS(object.actions.upload, file, sha256);
+                }
+                operations.push({
+                    key: 'lfsFile',
+                    value: {
+                        path: filePath,
+                        algo: 'sha256',
+                        size: file.size,
+                        oid: sha256
+                    }
+                });
+            } else {
+                operations.push(await this.fileOperation(filePath, file));
+            }
+
+            uploadedFiles.push({
+                filePath,
+                fileSize: file.size,
+                oid: sha256,
+                fileUrl: `${this.baseURL}/datasets/${this.repo}/resolve/main/${filePath}`
+            });
+        }
+
+        const commit = await this.commitOperations(operations, commitMessage);
+        return { success: true, files: uploadedFiles, commit };
     }
 
     /**
@@ -424,52 +517,9 @@ export class HuggingFaceAPI {
      * 直接提交文件（非 LFS，用于小文本文件）
      */
     async commitDirectFile(filePath, file, commitMessage) {
-        const url = `${this.baseURL}/api/datasets/${this.repo}/commit/main`;
-        
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        // 分块转换，避免大文件导致 Maximum call stack size exceeded
-        const chunkSize = 4096;
-        const parts = [];
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
-            let s = '';
-            for (let j = 0; j < chunk.length; j++) {
-                s += String.fromCharCode(chunk[j]);
-            }
-            parts.push(s);
-        }
-        const content = btoa(parts.join(''));
-        
-        const body = [
-            JSON.stringify({
-                key: 'header',
-                value: { summary: commitMessage }
-            }),
-            JSON.stringify({
-                key: 'file',
-                value: {
-                    path: filePath,
-                    content: content,
-                    encoding: 'base64'
-                }
-            })
-        ].join('\n');
-
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.token}`,
-                'Content-Type': 'application/x-ndjson'
-            },
-            body
-        });
-
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Direct commit failed: ${response.status} - ${error}`);
-        }
-
-        return await response.json();
+        return await this.commitOperations([
+            await this.fileOperation(filePath, file)
+        ], commitMessage);
     }
 
     /**

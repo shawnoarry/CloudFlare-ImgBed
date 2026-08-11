@@ -51,6 +51,7 @@ import * as apiChannels from '../../functions/api/channels.js';
 import * as apiDirectoryTree from '../../functions/api/directoryTree.js';
 import * as apiFetchRes from '../../functions/api/fetchRes.js';
 import * as apiUserConfig from '../../functions/api/userConfig.js';
+import * as uploadBatch from '../../functions/upload/batch.js';
 import * as random_index from '../../functions/random/index.js';
 import * as upload_index from '../../functions/upload/index.js';
 import * as apiManageBlockCatchAll from '../../functions/api/manage/block/[[path]].js';
@@ -102,6 +103,7 @@ const routes = [
     { path: '/api/directoryTree', module: apiDirectoryTree, middlewares: [mw_api] },
     { path: '/api/fetchRes', module: apiFetchRes, middlewares: [mw_api] },
     { path: '/api/userConfig', module: apiUserConfig, middlewares: [mw_api] },
+    { path: '/upload/batch', module: uploadBatch, middlewares: [mw_upload] },
     { path: '/random', module: random_index, middlewares: [mw_random] },
     { path: '/upload', module: upload_index, middlewares: [mw_upload] },
     { path: '/api/manage/block/', module: apiManageBlockCatchAll, middlewares: [mw_api, mw_api_manage], catchAll: true },

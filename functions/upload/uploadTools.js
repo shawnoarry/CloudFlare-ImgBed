@@ -1,5 +1,5 @@
-import { fetchSecurityConfig } from "../utils/sysConfig";
-import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../utils/purgeCache";
+import { fetchSecurityConfig } from "../utils/sysConfig.js";
+import { purgeCFCache, purgeRandomFileListCache, purgePublicFileListCache } from "../utils/purgeCache.js";
 import { addFileToIndex } from "../utils/indexManager.js";
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { shouldRejectUploadConflict } from '../utils/uploadIntegrity.js';

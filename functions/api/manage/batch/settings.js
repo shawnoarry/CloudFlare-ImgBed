@@ -6,6 +6,7 @@
  */
 
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { redactStoredManagementConfig } from '../../../utils/configSecrets.js';
 
 // CORS 跨域响应头
 const corsHeaders = {
@@ -157,7 +158,7 @@ export async function onRequestGet(context) {
             
             // 使用移除前缀后的键名
             const settingKey = stripManagePrefix(key);
-            settings[settingKey] = parsedValue;
+            settings[settingKey] = redactStoredManagementConfig(settingKey, parsedValue);
           }
         } catch (valueError) {
           // 读取值失败时记录错误但继续处理
@@ -173,6 +174,7 @@ export async function onRequestGet(context) {
     // 4. 返回成功响应
     return jsonResponse({
       success: true,
+      secretsExcluded: true,
       settings,
     });
 

@@ -13,6 +13,8 @@ import { HuggingFaceAPI } from "../utils/storage/huggingfaceAPI";
 import { WebDAVAPI } from "../utils/storage/webdavAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { isProtectedFileId } from '../utils/auth/authPolicy.js';
+import { verifyUploadSha256 } from '../utils/uploadIntegrity.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -166,6 +168,20 @@ async function processFileUpload(context, formdata = null) {
     // uploadFolder 已经过 sanitizeUploadFolder 处理，直接使用
     const normalizedFolder = uploadFolder;
 
+    const protectedUpload = isProtectedFileId(normalizedFolder, context.env);
+    if (protectedUpload && url.searchParams.get('uploadNameType') !== 'origin') {
+        return createResponse('Error: protected uploads require uploadNameType=origin', { status: 400 });
+    }
+
+    let verifiedSha256 = null;
+    try {
+        verifiedSha256 = await verifyUploadSha256(file, formdata.get('sha256'), {
+            required: protectedUpload,
+        });
+    } catch (error) {
+        return createResponse(`Error: ${error.message}`, { status: error.status || 400 });
+    }
+
     const metadata = {
         FileName: fileName,
         FileType: fileType,
@@ -180,6 +196,10 @@ async function processFileUpload(context, formdata = null) {
         Tags: []
     };
 
+    if (verifiedSha256) {
+        metadata.SHA256 = verifiedSha256;
+    }
+
     // 添加图片尺寸信息
     if (imageDimensions) {
         metadata.Width = imageDimensions.width;
@@ -189,7 +209,17 @@ async function processFileUpload(context, formdata = null) {
     const fileExt = resolveFileExt(fileName, fileType);
 
     // 构建文件ID
-    const fullId = await buildUniqueFileId(context, fileName, fileType);
+    let fullId;
+    try {
+        fullId = await buildUniqueFileId(context, fileName, fileType);
+    } catch (error) {
+        if (error?.status === 409) {
+            return createResponse(`Error: ${error.message}`, { status: 409 });
+        }
+        throw error;
+    }
+    context.uploadFileId = fullId;
+    context.verifiedSha256 = verifiedSha256;
 
     // 获得返回链接格式, default为返回/file/id, full为返回完整链接
     const returnFormat = url.searchParams.get('returnFormat') || 'default';
@@ -273,7 +303,13 @@ async function processFileUpload(context, formdata = null) {
 
 // 构建上传成功响应，自动附带 publicUrl（如果已配置）
 function buildUploadResponse(context, returnLink) {
-    const result = { src: returnLink };
+    const result = {
+        src: returnLink,
+        fileId: context.uploadFileId,
+    };
+    if (context.verifiedSha256) {
+        result.sha256 = context.verifiedSha256;
+    }
     if (context.publicUrl) {
         result.publicUrl = context.publicUrl;
     }

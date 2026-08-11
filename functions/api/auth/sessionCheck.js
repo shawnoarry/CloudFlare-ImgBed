@@ -1,5 +1,6 @@
 import { validateAnySession } from "../../utils/auth/sessionManager.js";
 import { fetchSecurityConfig } from "../../utils/sysConfig.js";
+import { isAnonymousAccessAllowed } from "../../utils/auth/authPolicy.js";
 
 /**
  * 会话检查接口
@@ -24,8 +25,9 @@ export async function onRequestGet(context) {
     const adminPassword = securityConfig.auth.admin.adminPassword;
     const userAuthCode = securityConfig.auth.user.authCode;
 
-    const adminRequired = !!(adminUsername && adminUsername.trim()) || !!(adminPassword && adminPassword.trim());
-    const userRequired = !!(userAuthCode && userAuthCode.trim());
+    const anonymousAllowed = isAnonymousAccessAllowed(env);
+    const adminRequired = !anonymousAllowed || !!(adminUsername && adminUsername.trim()) || !!(adminPassword && adminPassword.trim());
+    const userRequired = !anonymousAllowed || !!(userAuthCode && userAuthCode.trim());
 
     // 检查会话
     const sessionResult = await validateAnySession(env, request);

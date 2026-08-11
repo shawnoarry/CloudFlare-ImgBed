@@ -1,6 +1,38 @@
 import { getDatabase } from '../../utils/databaseAdapter.js';
 import { filterAutoDeleteTokens } from '../../utils/auth/tokenExpiration.js';
 
+const TOKEN_PREFIX_LENGTH = 15;
+
+export async function hashApiToken(token) {
+    const data = new TextEncoder().encode(token);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest))
+        .map(byte => byte.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+async function findTokenRecord(db, token) {
+    const settingsStr = await db.get('manage@sysConfig@security');
+    const settings = settingsStr ? JSON.parse(settingsStr) : {};
+    const tokens = settings.apiTokens?.tokens || {};
+    const tokenHash = await hashApiToken(token);
+
+    for (const tokenId in tokens) {
+        const tokenData = tokens[tokenId];
+        if (tokenData.tokenHash === tokenHash || tokenData.token === token) {
+            if (!tokenData.tokenHash || tokenData.token) {
+                tokenData.tokenHash = tokenHash;
+                tokenData.tokenPrefix = token.slice(0, TOKEN_PREFIX_LENGTH);
+                delete tokenData.token;
+                await db.put('manage@sysConfig@security', JSON.stringify(settings));
+            }
+            return tokenData;
+        }
+    }
+
+    return null;
+}
+
 export async function onRequest(context) {
     // API Token管理，支持创建、删除、列出Token
     const {
@@ -109,7 +141,7 @@ async function getApiTokens(db) {
                 permissions: token.permissions,
                 createdAt: token.createdAt,
                 updatedAt: token.updatedAt,
-                token: token.token,
+                tokenPrefix: token.tokenPrefix || token.token?.slice(0, TOKEN_PREFIX_LENGTH) || '',
                 expiresAt: token.expiresAt ?? null,
                 autoDelete: token.autoDelete ?? false
             }
@@ -134,7 +166,7 @@ async function getApiTokens(db) {
         permissions: t.permissions,
         createdAt: t.createdAt,
         updatedAt: t.updatedAt,
-        token: t.token.substr(0, 15) + '...', // 只显示前15位
+        token: t.tokenPrefix ? `${t.tokenPrefix}...` : '',
         expiresAt: t.expiresAt,
         autoDelete: t.autoDelete
     }))
@@ -153,12 +185,14 @@ export async function createApiToken(db, name, permissions, owner, expiresAt = n
     
     const tokenId = generateTokenId()
     const token = generateApiToken()
+    const tokenHash = await hashApiToken(token)
     const now = new Date().toISOString()
     
     const tokenData = {
         id: tokenId,
         name,
-        token,
+        tokenHash,
+        tokenPrefix: token.slice(0, TOKEN_PREFIX_LENGTH),
         owner,
         permissions,
         type,
@@ -244,43 +278,24 @@ function generateTokenId() {
 
 // 根据Token获取权限（供其他API使用）
 export async function getTokenPermissions(db, token) {
-    const settingsStr = await db.get('manage@sysConfig@security')
-    const settings = settingsStr ? JSON.parse(settingsStr) : {}
-    const tokens = settings.apiTokens?.tokens || {}
-    
-    // 查找匹配的token
-    for (const tokenId in tokens) {
-        if (tokens[tokenId].token === token) {
-            return tokens[tokenId].permissions
-        }
-    }
-    
-    return null
+    const tokenData = await findTokenRecord(db, token)
+    return tokenData?.permissions || null
 }
 
 // 根据Token获取完整数据对象（供tokenValidator使用）
 export async function getTokenData(db, token) {
-    const settingsStr = await db.get('manage@sysConfig@security')
-    const settings = settingsStr ? JSON.parse(settingsStr) : {}
-    const tokens = settings.apiTokens?.tokens || {}
-    
-    // 查找匹配的token
-    for (const tokenId in tokens) {
-        if (tokens[tokenId].token === token) {
-            const t = tokens[tokenId]
-            return {
-                id: t.id,
-                name: t.name,
-                token: t.token,
-                owner: t.owner,
-                permissions: t.permissions,
-                createdAt: t.createdAt,
-                updatedAt: t.updatedAt,
-                expiresAt: t.expiresAt ?? null,
-                autoDelete: t.autoDelete ?? false
-            }
-        }
+    const t = await findTokenRecord(db, token)
+    if (!t) return null
+
+    return {
+        id: t.id,
+        name: t.name,
+        tokenPrefix: t.tokenPrefix,
+        owner: t.owner,
+        permissions: t.permissions,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt,
+        expiresAt: t.expiresAt ?? null,
+        autoDelete: t.autoDelete ?? false
     }
-    
-    return null
 }

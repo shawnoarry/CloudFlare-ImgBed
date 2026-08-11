@@ -8,6 +8,7 @@ import { validateApiToken } from './tokenValidator.js';
 import { getDatabase } from '../databaseAdapter.js';
 import { verifyPassword } from './passwordHash.js';
 import { validateSession } from './sessionManager.js';
+import { isAnonymousAccessAllowed } from './authPolicy.js';
 
 /**
  * 认证范围常量
@@ -31,9 +32,9 @@ const UNAUTHORIZED = { authorized: false, authType: null };
  * @returns {Promise<{authorized: boolean, authType: string|null}|null>}
  *          认证通过返回结果，未通过返回 null（交给调用方继续）
  */
-async function checkAdmin({ env, request, adminConfigured }) {
+async function checkAdmin({ env, request, adminConfigured, anonymousAllowed }) {
     if (!adminConfigured) {
-        return AUTHORIZED('admin'); // 未配置管理员认证，视为管理员身份放行
+        return anonymousAllowed ? AUTHORIZED('anonymous') : null;
     }
 
     const session = await validateSession(env, request, 'admin');
@@ -51,7 +52,7 @@ async function checkAdmin({ env, request, adminConfigured }) {
  * @returns {Promise<{authorized: boolean, authType: string|null}|null>}
  *          认证通过/失败返回结果，无法判定返回 null
  */
-async function checkUser({ env, request, url, authCodeConfigured, userAuthCode }) {
+async function checkUser({ env, request, url, authCodeConfigured, userAuthCode, anonymousAllowed }) {
     // admin session（管理员身份也可访问用户资源）
     const adminSession = await validateSession(env, request, 'admin');
     if (adminSession.valid) {
@@ -66,7 +67,7 @@ async function checkUser({ env, request, url, authCodeConfigured, userAuthCode }
 
     // authCode
     if (!authCodeConfigured) {
-        return AUTHORIZED('user'); // 未配置用户认证，视为用户身份放行
+        return anonymousAllowed ? AUTHORIZED('anonymous') : UNAUTHORIZED;
     }
 
     if (url) {
@@ -105,6 +106,7 @@ export async function authenticate({
 
     const adminConfigured = !!(adminUsername && adminUsername.trim()) || !!(adminPassword && adminPassword.trim());
     const authCodeConfigured = !!(userAuthCode && userAuthCode.trim());
+    const anonymousAllowed = isAnonymousAccessAllowed(env);
 
     // --- API Token 验证（公共层，所有 scope 通用） ---
     const db = getDatabase(env);
@@ -114,8 +116,8 @@ export async function authenticate({
     }
 
     // --- 会话/凭据验证 ---
-    const adminCtx = { env, request, adminConfigured };
-    const userCtx = { env, request, url, authCodeConfigured, userAuthCode };
+    const adminCtx = { env, request, adminConfigured, anonymousAllowed };
+    const userCtx = { env, request, url, authCodeConfigured, userAuthCode, anonymousAllowed };
 
     if (authScope === AUTH_SCOPE.ADMIN) {
         return (await checkAdmin(adminCtx)) || UNAUTHORIZED;

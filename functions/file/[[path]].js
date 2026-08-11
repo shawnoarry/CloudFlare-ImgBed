@@ -10,6 +10,7 @@ import {
 } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
 import { authenticate, AUTH_SCOPE } from '../utils/auth/authCore.js';
+import { isProtectedFileId } from '../utils/auth/authPolicy.js';
 import {
     resolveDiscordCredentials,
     resolveHuggingFaceCredentials,
@@ -63,6 +64,10 @@ export async function onRequest(context) {  // Contents of context object
     context.Referer = Referer;
 
     context.fileAccess = await buildFileAccessContext(context);
+    const protectedAccessResponse = await authorizeProtectedFileAccess(context, fileId);
+    if (protectedAccessResponse) {
+        return protectedAccessResponse;
+    }
 
     // 检查引用域名是否被允许
     if (!isDomainAllowed(context)) {
@@ -247,6 +252,33 @@ async function buildFileAccessContext(context) {
     }
 
     return fileAccess;
+}
+
+async function authorizeProtectedFileAccess(context, fileId) {
+    const { env, request, url } = context;
+    if (!isProtectedFileId(fileId, env)) return null;
+
+    const result = await authenticate({
+        env,
+        request,
+        url,
+        requiredPermission: 'list',
+        authScope: AUTH_SCOPE.ADMIN,
+    });
+
+    if (!result.authorized) {
+        return new Response('Protected file authentication required', {
+            status: 401,
+            headers: {
+                'Cache-Control': FILE_CACHE_CONTROL.NO_STORE,
+                'WWW-Authenticate': 'Bearer',
+            },
+        });
+    }
+
+    context.fileAccess.isProtected = true;
+    context.fileAccess.cacheControl = FILE_CACHE_CONTROL.NO_STORE;
+    return null;
 }
 
 function getFileCacheControl(context) {

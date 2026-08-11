@@ -1,5 +1,9 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { createApiToken, deleteApiToken } from '../apiTokens.js';
+import {
+    preserveOthersConfigSecrets,
+    redactOthersConfig,
+} from '../../../utils/configSecrets.js';
 
 export async function onRequest(context) {
     // 其他设置相关，GET方法读取设置，POST方法保存设置
@@ -18,7 +22,7 @@ export async function onRequest(context) {
     if (request.method === 'GET') {
         const settings = await getOthersConfig(db, env)
 
-        return new Response(JSON.stringify(settings), {
+        return new Response(JSON.stringify(redactOthersConfig(settings)), {
             headers: {
                 'content-type': 'application/json',
             },
@@ -28,12 +32,11 @@ export async function onRequest(context) {
     // POST保存设置
     if (request.method === 'POST') {
         const body = await request.json()
-        const settings = body
+        const oldSettings = await getOthersConfig(db, env);
+        const settings = preserveOthersConfigSecrets(body, oldSettings)
 
         // WebDAV internal token 管理
         const webDAV = settings.webDAV || {};
-        const oldSettings = await getOthersConfig(db, env);
-        const wasEnabled = oldSettings.webDAV?.enabled;
         const isEnabled = webDAV.enabled;
 
         if (isEnabled && !webDAV.internalToken) {
@@ -59,7 +62,7 @@ export async function onRequest(context) {
         // 写入数据库
         await db.put('manage@sysConfig@others', JSON.stringify(settings))
 
-        return new Response(JSON.stringify(settings), {
+        return new Response(JSON.stringify(redactOthersConfig(settings)), {
             headers: {
                 'content-type': 'application/json',
             },

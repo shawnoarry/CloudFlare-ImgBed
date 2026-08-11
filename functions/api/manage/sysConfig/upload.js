@@ -1,5 +1,6 @@
 import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { normalizeWebDAVHeaders } from '../../../utils/storage/webdavAPI.js';
+import { preserveUploadConfigSecrets, redactUploadConfig } from '../../../utils/configSecrets.js';
 
 export async function onRequest(context) {
     // 上传设置相关，GET方法读取设置，POST方法保存设置
@@ -18,7 +19,7 @@ export async function onRequest(context) {
     if (request.method === 'GET') {
         const settings = await getUploadConfig(db, env)
 
-        return new Response(JSON.stringify(settings), {
+        return new Response(JSON.stringify(redactUploadConfig(settings)), {
             headers: {
                 'content-type': 'application/json',
             },
@@ -28,12 +29,14 @@ export async function onRequest(context) {
     // POST保存设置
     if (request.method === 'POST') {
         const body = await request.json()
-        const settings = body
+        const storedSettingsStr = await db.get('manage@sysConfig@upload')
+        const storedSettings = storedSettingsStr ? JSON.parse(storedSettingsStr) : {}
+        const settings = preserveUploadConfigSecrets(body, storedSettings)
 
         // 写入数据库
         await db.put('manage@sysConfig@upload', JSON.stringify(settings))
 
-        return new Response(JSON.stringify(settings), {
+        return new Response(JSON.stringify(redactUploadConfig(settings)), {
             headers: {
                 'content-type': 'application/json',
             },

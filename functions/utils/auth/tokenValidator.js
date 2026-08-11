@@ -52,10 +52,10 @@ export async function validateApiToken(request, db, requiredPermission) {
 /**
  * 从请求中提取Token信息
  * @param {Request} request - 请求对象
- * @param {KVNamespace} kv - KV存储
+ * @param {Object} db - Database adapter
  * @returns {Promise<object|null>} Token信息或null
  */
-export async function getTokenInfo(request, kv) {
+export async function getTokenInfo(request, db) {
     const authHeader = request.headers.get('Authorization');
     
     if (!authHeader) {
@@ -74,22 +74,5 @@ export async function getTokenInfo(request, kv) {
         return null;
     }
 
-    // 从KV中获取Token信息
-    const settingsStr = await kv.get('manage@sysConfig@security');
-    const settings = settingsStr ? JSON.parse(settingsStr) : {};
-    const tokens = settings.apiTokens?.tokens || {};
-    
-    // 查找匹配的token
-    for (const tokenId in tokens) {
-        if (tokens[tokenId].token === token) {
-            const t = tokens[tokenId];
-            return {
-                ...t,
-                expiresAt: t.expiresAt ?? null,
-                autoDelete: t.autoDelete ?? false
-            };
-        }
-    }
-    
-    return null;
+    return await getTokenData(db, token);
 }

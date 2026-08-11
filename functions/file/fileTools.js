@@ -170,7 +170,9 @@ export async function returnWithCheck(context, imgRecord) {
         return response;
     }
 
-    context.fileAccess.cacheControl = FILE_CACHE_CONTROL.PUBLIC;
+    context.fileAccess.cacheControl = context.fileAccess?.isProtected
+        ? FILE_CACHE_CONTROL.NO_STORE
+        : FILE_CACHE_CONTROL.PUBLIC;
 
     if (record.metadata.ListType == "White") {
         return response;

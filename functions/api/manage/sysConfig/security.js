@@ -2,6 +2,10 @@ import { getDatabase } from '../../../utils/databaseAdapter.js';
 import { hashPassword, isHashed } from '../../../utils/auth/passwordHash.js';
 import { destroySessionsByAuthType } from '../../../utils/auth/sessionManager.js';
 import { normalizeSessionMaxAgeDays } from '../../../utils/auth/sessionConfig.js';
+import {
+    preserveSecurityConfigSecrets,
+    redactSecurityConfig,
+} from '../../../utils/configSecrets.js';
 
 export async function onRequest(context) {
     // 安全设置相关，GET方法读取设置，POST方法保存设置
@@ -20,17 +24,7 @@ export async function onRequest(context) {
     if (request.method === 'GET') {
         const settings = await getSecurityConfig(db, env)
 
-        // 对前端隐藏实际密码值，返回占位符
-        // 前端只有在用户修改密码时才会发送新密码
-        const maskedSettings = JSON.parse(JSON.stringify(settings));
-        if (maskedSettings.auth.user?.authCode) {
-            maskedSettings.auth.user._hasPassword = true;
-            maskedSettings.auth.user.authCode = ''; // 不向前端暴露密码/哈希
-        }
-        if (maskedSettings.auth.admin?.adminPassword) {
-            maskedSettings.auth.admin._hasPassword = true;
-            maskedSettings.auth.admin.adminPassword = ''; // 不向前端暴露密码/哈希
-        }
+        const maskedSettings = redactSecurityConfig(settings);
 
         return new Response(JSON.stringify(maskedSettings), {
             headers: {
@@ -44,7 +38,7 @@ export async function onRequest(context) {
         const settings = await getSecurityConfig(db, env) // 先读取已有设置，再进行覆盖
 
         const body = await request.json()
-        const newSettings = body
+        const newSettings = preserveSecurityConfigSecrets(body, settings)
 
         // 覆盖设置，apiTokens不在这里修改
         settings.upload = newSettings.upload || settings.upload
